@@ -422,12 +422,13 @@ class emstdp:
 
     def create_cx(self,patternIdx, du,dv,vth,bias_mant =0, bias_exp =0):
         # du,dv,vth = converter(du,dv,vth)
-        return LIF(shape = (self.numHidNurns[patternIdx],),
+        return LIFReset(shape = (self.numHidNurns[patternIdx],),
                    du = du,
                    dv = dv,
                    vth = vth,
                    bias_mant = bias_mant,
-                   bias_exp = bias_exp
+                   bias_exp = bias_exp,
+                   reset_interval = 128
                    )
     def createTestGC(self, patternIdx):
                 
@@ -512,7 +513,7 @@ class emstdp:
         '''
         input neurons
         '''
-        mcSomaCx = LIFReset(
+        test_mc = LIFReset(
             shape = (self.numMCs,),
             du =du,
             dv = dv,
@@ -520,8 +521,7 @@ class emstdp:
             reset_interval = 128,
             name = "test"
         )
-        self.inputs = mcSomaCx
-        return self.inputs
+        self.inputs = test_mc
         
     def createGCNeuronsPerPattern(self, patternIdx):
             
@@ -1055,21 +1055,25 @@ class emstdp:
     '''
     set up another network to do the inference
     '''
-    '''
-    set up another network to do the inference
-    '''
-    def test(self,imgs,num_steps = 64):
+
+    def test(self,imgs,hid_wgt = [] , out_wgt = [] ,num_steps = 128):
         #create connections
         #reconstruct input:
         self.createTestInputs()
         for patternIdx in range(self.numlayers):
             self.createTestGC(patternIdx= patternIdx)
-
+        if len(hid_wgt) ==0:
+            hid_weights = self.hid_wgt
+            out_weights = self.out_wgt
+        else:
+            hid_weights = hid_wgt
+            out_weights = out_wgt
+            
         self.test_inter = Dense(
-            weights = self.hid_wgt
+            weights = hid_weights
         )
         self.test_out = Dense(
-            weights = self.out_wgt
+            weights = out_weights
         )
         # first layer connection
         self.inputs.s_out.connect(self.test_inter.s_in)
@@ -1079,30 +1083,29 @@ class emstdp:
         self.test_out.a_out.connect(self.hiddens[1].a_in)
 
         #probes for the spikes
-        self.out_probe = Monitor()
-        self.out_probe.probe(self.inputs.s_out, 1+len(imgs)*num_steps)
+        out_probe = Monitor()
+        out_probe.probe(self.hiddens[1].s_out, 1+len(imgs)*num_steps)
         self.inputs.run(condition=RunSteps(num_steps= 1), run_cfg=Loihi2HwCfg(
-            select_tag = 'floating_pt'
+            select_tag = 'fixed_pt'
         ))
         # running test cases
         for i in range(len(imgs)):
             #converting img input to integer
             img = imgs[i]
-            print(img)
             self.inputs.bias_mant.set(img)
             #running the network
             self.inputs.run(condition=RunSteps(num_steps= num_steps), run_cfg=Loihi2HwCfg(
-            select_tag = 'floating_pt'
+            select_tag = 'fixed_pt'
         ))
             
-        spikes = self.out_probe.get_data()['test']['s_out']
+        spikes = out_probe.get_data()[self.hiddens[1].name]['s_out']
         self.inputs.stop()
-        print(np.nonzero(spikes))
-        result = np.zeros((len(imgs),200))
+        result = np.zeros((len(imgs),10))
         for j in range(len(imgs)):
             tmp = np.sum(spikes[j*(num_steps):(j+1)*num_steps,:],axis =0)
             result[j,:] = tmp
-        res = np.max(result,axis =-1)
+        print(result)
+        res = np.argmax(result,axis =-1)
 
         return res
         
@@ -1161,24 +1164,24 @@ class emstdp:
         self.out_wgt = self.forwardConns[1].weights.get()
         spikes = probe.get_data()[self.allGCsPerPattern[1].name]['s_out']
         self.allMCSomaGrp.stop()
-        print(np.count_nonzero(spikes))
+        #print non zero elements
+        #print(np.count_nonzero(spikes))
         spikes = spikes[1:]
         result = np.zeros((len(imgs),10))
         for j in range(len(imgs)):
             tmp = np.sum(spikes[j*(num_steps):(j+1)*num_steps,:],axis =0)
             result[j,:] = tmp
         print(result[-10:])
-        res = np.max(result,axis =-1)
+        res = np.argmax(result,axis =-1)
+        #print the last 10 spiking results
         print(res[-10])
-        # #saving weig
+        # #saving weigt
         np.save("hid_wgt",self.hid_wgt)
         np.save("out_wgt",self.out_wgt)
 
         #return weights
     def weights(self):
         return self.hid_wgt, self.out_wgt 
-
-
 
 
 #
